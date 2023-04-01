@@ -1,6 +1,5 @@
 resource "aws_s3_bucket" "front_end_app" {
   bucket = "video-training-frontend-app"
-  acl    = "public-read"
   policy = <<POLICY
   {
     "Version": "2012-10-17",
@@ -14,10 +13,22 @@ resource "aws_s3_bucket" "front_end_app" {
       }
     ]
   }
-}
 POLICY
-  website {
-    index_document = "index.html"
-    error_document = "index.html"
+}
+
+resource "aws_s3_bucket_acl" "front_end_app_acl" {
+  bucket = aws_s3_bucket.front_end_app.id
+  acl    = "public-read"
+}
+
+resource "aws_s3_bucket_website_configuration" "front_end_app" {
+  bucket = aws_s3_bucket.front_end_app.id
+
+  index_document {
+    suffix = "index.html"
+  }
+
+  error_document {
+    key = "index.html"
   }
 }
