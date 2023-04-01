@@ -1,66 +1,77 @@
 
-data "aws_iam_policy_document" "ecs_agent" {
-  statement {
-    actions = ["sts:AssumeRole"]
+data "aws_availability_zones" "available_zones" {
+  state = "available"
+}
 
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
+
+resource "aws_vpc" "default" {
+  cidr_block = "10.32.0.0/16"
+}
+
+resource "aws_subnet" "public" {
+  count                   = 2
+  cidr_block              = cidrsubnet(aws_vpc.default.cidr_block, 8, 2 + count.index)
+  availability_zone       = data.aws_availability_zones.available_zones.names[count.index]
+  vpc_id                  = aws_vpc.default.id
+  map_public_ip_on_launch = true
+  tags = {
+    Name = "Public"
   }
 }
 
-resource "aws_ecr_repository" "video_training_api" {
-  name = "video_training_api"
+resource "aws_subnet" "private" {
+  count             = 2
+  cidr_block        = cidrsubnet(aws_vpc.default.cidr_block, 8, count.index)
+  availability_zone = data.aws_availability_zones.available_zones.names[count.index]
+  vpc_id            = aws_vpc.default.id
+  tags = {
+    Name = "Private"
+  }
 }
 
-resource "aws_iam_role" "ecs_agent" {
-  name               = "ecs-agent"
-  assume_role_policy = data.aws_iam_policy_document.ecs_agent.json
+resource "aws_internet_gateway" "gateway" {
+  vpc_id = aws_vpc.default.id
+}
+
+resource "aws_route" "internet_access" {
+  route_table_id         = aws_vpc.default.main_route_table_id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.gateway.id
+}
+
+resource "aws_eip" "gateway" {
+  count      = 2
+  vpc        = true
+  depends_on = [aws_internet_gateway.gateway]
+}
+
+resource "aws_nat_gateway" "gateway" {
+  count         = 2
+  subnet_id     = element(aws_subnet.public.*.id, count.index)
+  allocation_id = element(aws_eip.gateway.*.id, count.index)
+}
+
+resource "aws_route_table" "private" {
+  count  = 2
+  vpc_id = aws_vpc.default.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = element(aws_nat_gateway.gateway.*.id, count.index)
+  }
+}
+
+resource "aws_route_table_association" "private" {
+  count          = 2
+  subnet_id      = element(aws_subnet.private.*.id, count.index)
+  route_table_id = element(aws_route_table.private.*.id, count.index)
 }
 
 
-resource "aws_iam_role_policy_attachment" "ecs_agent" {
-  depends_on = [aws_iam_role.ecs_agent]
-  role       = "aws_iam_role.ecs_agent.name"
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
-}
 
-resource "aws_iam_instance_profile" "ecs_agent" {
-  name = "ecs-agent"
-  role = aws_iam_role.ecs_agent.name
-}
-
-resource "aws_launch_configuration" "ecs_launch_config" {
-  image_id             = "ami-094d4d00fd7462815"
-  iam_instance_profile = aws_iam_instance_profile.ecs_agent.name
-  security_groups      = [aws_security_group.ecs_sg.id]
-  user_data            = "#!/bin/bash\necho ECS_CLUSTER=production-cluster >> /etc/ecs/ecs.config"
-  instance_type        = "t2.micro"
-}
-
-resource "aws_autoscaling_group" "failure_analysis_ecs_asg" {
-  name                      = "asg"
-  launch_configuration      = aws_launch_configuration.ecs_launch_config.name
-  desired_capacity          = 2
-  min_size                  = 2
-  max_size                  = 3
-  health_check_grace_period = 300
-  health_check_type         = "EC2"
-}
-
-resource "aws_ecs_cluster" "ecs_cluster" {
-  name = "production-cluster"
-}
-
-resource "aws_ecs_task_definition" "task_definition" {
-  family                = "api"
-  container_definitions = templatefile("${path.module}/api-task-definition.tftpl", { REPOSITORY_URL = aws_ecr_repository.video_training_api.repository_url })
-}
-
-resource "aws_ecs_service" "video_training_api" {
-  name            = "video-training-api"
-  cluster         = aws_ecs_cluster.ecs_cluster.id
-  task_definition = aws_ecs_task_definition.task_definition.arn
-  desired_count   = 2
+resource "aws_ecs_cluster" "main" {
+  name = "my-cluster"
+  tags = {
+    "Custo" : "Hackaton"
+  }
 }
